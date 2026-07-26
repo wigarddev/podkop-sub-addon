@@ -26,10 +26,34 @@ b64_decode() {
   printf '%s' "$data" | base64 -d 2>/dev/null
 }
 
+nlines() { printf '%s' "$1" | grep -c . ; }
+
 BACKUP=/tmp/podkop-sub.podkop.prev
 
+# Remnawave-based panels hide the real list behind a device id: without an
+# x-hwid header they answer with a single "App not supported" placeholder.
+# The id is stored rather than derived on every run - the panel counts distinct
+# ids against the account's device limit, so a changing one would eat it up.
+HWID=
+ensure_hwid() {
+  local mac
+
+  HWID=$(uci -q get "$CONF".main.hwid)
+  [ -n "$HWID" ] && return
+
+  mac=$(cat /sys/class/net/*/address 2>/dev/null \
+    | grep -v '^00:00:00:00:00:00$' | head -1 | tr -d ':')
+  [ -n "$mac" ] || mac=$(head -c 6 /dev/urandom | md5sum | cut -c1-12)
+
+  HWID="$mac"
+  uci set "$CONF".main.hwid="$HWID"
+  uci commit "$CONF"
+  log "Device id generated: $HWID"
+}
+
 cmd_update() {
-  local url target body payload links count before after applied i
+  local url target body payload raw links usable skipped count
+  local before after applied i reason
 
   config_load "$CONF"
   config_get url    main url
@@ -42,8 +66,13 @@ cmd_update() {
     return 2
   fi
 
+  ensure_hwid
+
+  # The User-Agent stays ours on purpose: panels pick the response format by
+  # it, and passing for a known client would get us that client's format
+  # (Happ, for one, is answered with an xray JSON config) instead of a list.
   log "Fetching $(mask_url "$url")"
-  body=$(curl -fsSL --max-time 30 -A "$UA" "$url") || {
+  body=$(curl -fsSL --max-time 30 -A "$UA" -H "x-hwid: $HWID" "$url") || {
     err "Fetch failed"
     return 3
   }
@@ -54,16 +83,45 @@ cmd_update() {
     *)     payload=$(printf '%s' "$body" | b64_decode) ;;
   esac
 
-  links=$(printf '%s\n' "$payload" \
+  raw=$(printf '%s\n' "$payload" \
     | tr -d '\r' \
     | grep -E '^(vless|vmess|trojan|ss|hysteria2|socks5?)://' \
     | awk '!seen[$0]++')
 
-  count=$(printf '%s' "$links" | grep -c . )
-  [ "$count" -gt 0 ] || {
-    err "No server links found in the subscription"
+  # A panel that turns us down still answers 200, with one link pointing at
+  # 0.0.0.0. Left in, podkop would happily accept it and route everything into
+  # a dead outbound.
+  links=$(printf '%s\n' "$raw" | grep -v '@0\.0\.0\.0:')
+
+  # podkop builds tcp, ws and grpc transports and nothing else: for the rest it
+  # logs "Unknown transport" and still emits the outbound, just without the
+  # transport - a server that lands in the pool and can never connect. Links
+  # carrying no type at all (ss, hysteria2) are left to podkop to figure out.
+  usable=$(printf '%s\n' "$links" \
+    | awk '!/[?&]type=/ || /[?&]type=(tcp|raw|ws|grpc)([&#]|$)/')
+  skipped=$(( $(nlines "$links") - $(nlines "$usable") ))
+  [ "$skipped" -gt 0 ] && log "Skipped $skipped server(s): transport not supported by podkop"
+  links="$usable"
+
+  count=$(nlines "$links")
+  if [ "$count" -eq 0 ]; then
+    if printf '%s' "$raw" | grep -q '@0\.0\.0\.0:'; then
+      err "The panel returned a placeholder instead of servers - device rejected"
+    elif [ "$skipped" -gt 0 ]; then
+      err "No usable servers: podkop supports tcp, ws and grpc only"
+    else
+      err "No server links found in the subscription"
+    fi
     return 4
-  }
+  fi
+
+  # podkop leaves config.json alone when the generated config comes out the
+  # same, and then the mtime watch below would call a successful no-op a
+  # failure. Nothing to do anyway if the list did not move.
+  if [ "$(config_load podkop; config_list_foreach "$target" urltest_proxy_links echo)" = "$links" ]; then
+    log "Server list unchanged, $count servers"
+    return 0
+  fi
 
   # The UCI write below lands before podkop gets a chance to reject it, so a
   # bad subscription would leave a config that only breaks on the next boot.
@@ -99,7 +157,8 @@ cmd_update() {
   done
 
   if [ "$after" = "$before" ]; then
-    err "podkop rejected the new servers: $(logread -e podkop | grep -F '[fatal]' | tail -1 | sed 's/.*\[fatal\] //')"
+    reason=$(logread -e podkop | grep -F '[fatal]' | tail -1 | sed 's/.*\[fatal\] //')
+    err "podkop rejected the new servers: ${reason:-nothing logged}"
     cp "$BACKUP" /etc/config/podkop
     /etc/init.d/podkop restart >/dev/null 2>&1
     err "Previous server list restored"

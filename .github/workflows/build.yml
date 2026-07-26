@@ -1,0 +1,53 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both packages are PKGARCH:=all, so one SDK is enough. The SDK version
+        # decides the package format: 25.12 produces .apk, 24.10 produces .ipk.
+        arch:
+          - aarch64_cortex-a53-25.12.5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}
+          FEEDNAME: podkop_sub
+          PACKAGES: podkop-sub luci-app-podkop-sub
+          V: s
+
+      - name: List artifacts
+        run: find bin -type f \( -name '*.apk' -o -name '*.ipk' \) -print
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.arch }}
+          path: |
+            bin/packages/**/*.apk
+            bin/packages/**/*.ipk
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bin/packages/**/*.apk
+            bin/packages/**/*.ipk

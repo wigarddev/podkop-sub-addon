@@ -38,9 +38,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.arch }}
+          # Scoped to our own feed on purpose: the SDK also builds the
+          # dependencies (curl, jq, zlib...), and shipping those would shadow
+          # the officially signed packages from the OpenWrt feeds.
           path: |
-            bin/packages/**/*.apk
-            bin/packages/**/*.ipk
+            bin/packages/*/podkop_sub/*.apk
+            bin/packages/*/podkop_sub/*.ipk
           if-no-files-found: error
 
       - name: Attach to release
@@ -48,5 +51,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            bin/packages/**/*.apk
-            bin/packages/**/*.ipk
+            bin/packages/*/podkop_sub/*.apk
+            bin/packages/*/podkop_sub/*.ipk

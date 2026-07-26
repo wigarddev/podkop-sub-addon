@@ -1,0 +1,11 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+
+# make interprets recipe lines only when they start with a real tab -
+# reindenting these to spaces breaks the build with "missing separator"
+[{Makefile,*.mk}]
+indent_style = tab

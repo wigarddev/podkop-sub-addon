@@ -14,7 +14,9 @@ define Package/podkop-sub
   CATEGORY:=Network
   TITLE:=Subscription loader for podkop
   URL:=https://github.com/wigarddev/podkop-sub-addon
-  DEPENDS:=+podkop +curl +jq
+  # podkop is deliberately absent: it ships via GitHub releases, not an OpenWrt
+  # feed, so the SDK cannot resolve it. Required at runtime - the CLI checks.
+  DEPENDS:=+curl +jq
   PKGARCH:=all
 endef
 
@@ -34,8 +36,7 @@ endef
 define Package/podkop-sub/install
 	$(INSTALL_DIR) $(1)/usr/bin $(1)/etc/config
 	$(INSTALL_BIN) ./files/usr/bin/podkop-sub $(1)/usr/bin/
-	$(INSTALL_DATA) ./files/etc/config/podkop-sub $(1)/etc/config/
-	chmod 0600 $(1)/etc/config/podkop-sub
+	$(INSTALL_CONF) ./files/etc/config/podkop-sub $(1)/etc/config/
 endef
 
 $(eval $(call BuildPackage,podkop-sub))

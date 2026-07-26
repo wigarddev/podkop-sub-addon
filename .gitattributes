@@ -1,0 +1,4 @@
+# Everything here is consumed by Linux: the CLI runs on the router, where a
+# CRLF shebang means "not found", and make chokes on CRLF recipes. Force LF in
+# working copies regardless of the local core.autocrlf setting.
+* text=auto eol=lf

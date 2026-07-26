@@ -4,7 +4,7 @@
 . /lib/functions.sh
 
 CONF=podkop-sub
-UA="podkop-sub/0.1"
+UA="podkop-sub/0.2"
 
 log() { logger -t podkop-sub "$1"; echo "$1"; }
 err() { logger -t podkop-sub -p user.err "$1"; echo "$1" >&2; }
@@ -116,14 +116,54 @@ cmd_update() {
   fi
 }
 
+# Fixed schedule on purpose: once a day is enough for a server list, and an
+# interval setting nobody asked for is one more thing to keep working.
+CRON_CMD="/usr/bin/podkop-sub update"
+CRON_LINE="0 5 * * * $CRON_CMD >/dev/null 2>&1"
+
+# Brings root's crontab in line with the config. /etc/init.d/podkop-sub calls
+# this on every change of /etc/config/podkop-sub, so nothing has to be run by
+# hand after ticking the checkbox in LuCI.
+cmd_cron() {
+  local enabled url rest
+
+  config_load "$CONF"
+  config_get_bool enabled main auto_update 1
+  config_get url main url
+
+  # Without a URL the nightly run could only fail. Saving one fires the config
+  # trigger, which lands back here and schedules the job then.
+  [ -n "$url" ] || enabled=0
+  [ "$1" = "off" ] && enabled=0
+
+  rest=$(crontab -l 2>/dev/null | grep -vF "$CRON_CMD")
+
+  {
+    [ -n "$rest" ] && printf '%s\n' "$rest"
+    [ "$enabled" = 1 ] && printf '%s\n' "$CRON_LINE"
+  } | crontab -
+
+  if [ "$enabled" = 1 ]; then
+    log "Daily update scheduled at 05:00 router time"
+    # busybox crond refuses to start while /etc/crontabs is empty, so on a
+    # router that never had a cron job it is not running yet
+    /etc/init.d/cron enable
+    /etc/init.d/cron restart >/dev/null 2>&1
+  else
+    log "Daily update disabled"
+  fi
+}
+
 case "$1" in
   update) cmd_update ;;
+  cron)   cmd_cron "$2" ;;
   *)
     # Deliberately not a <<-EOF heredoc: that form strips only tabs, so a
     # reindent to spaces silently breaks the script.
-    echo "Usage: $0 update"
+    echo "Usage: $0 update|cron"
     echo
     echo "    update    fetch the subscription and rewrite podkop's server list"
+    echo "    cron      sync the scheduled update with the config"
     exit 1
     ;;
 esac

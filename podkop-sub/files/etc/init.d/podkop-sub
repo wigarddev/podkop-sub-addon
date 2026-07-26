@@ -1,0 +1,19 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+USE_PROCD=1
+
+# Not a daemon. This exists for the config trigger below: whenever
+# /etc/config/podkop-sub is committed - from LuCI or from uci - the cron entry
+# is rewritten to match, so the checkbox takes effect without extra steps.
+start_service() {
+  /usr/bin/podkop-sub cron
+}
+
+stop_service() {
+  /usr/bin/podkop-sub cron off
+}
+
+service_triggers() {
+  procd_add_config_trigger "config.change" "podkop-sub" /etc/init.d/podkop-sub start
+}

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=podkop-sub
-PKG_VERSION:=0.1.0
+PKG_VERSION:=0.2.0
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT
@@ -34,9 +34,29 @@ define Package/podkop-sub/conffiles
 endef
 
 define Package/podkop-sub/install
-	$(INSTALL_DIR) $(1)/usr/bin $(1)/etc/config
+	$(INSTALL_DIR) $(1)/usr/bin $(1)/etc/config $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/usr/bin/podkop-sub $(1)/usr/bin/
 	$(INSTALL_CONF) ./files/etc/config/podkop-sub $(1)/etc/config/
+	$(INSTALL_BIN) ./files/etc/init.d/podkop-sub $(1)/etc/init.d/
+endef
+
+# The init script is trigger-only: it has to be started once so procd learns
+# about the config trigger, and enabled so it comes back after a reboot.
+define Package/podkop-sub/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+/etc/init.d/podkop-sub enable
+/etc/init.d/podkop-sub start
+exit 0
+endef
+
+# Leave no cron line pointing at a binary that is about to disappear
+define Package/podkop-sub/prerm
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+/etc/init.d/podkop-sub stop
+/etc/init.d/podkop-sub disable
+exit 0
 endef
 
 $(eval $(call BuildPackage,podkop-sub))

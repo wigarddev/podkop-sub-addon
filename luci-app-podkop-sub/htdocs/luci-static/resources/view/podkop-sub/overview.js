@@ -17,6 +17,11 @@ return view.extend({
     o = s.option(form.Value, 'url', _('Ссылка подписки'));
     o.placeholder = 'https://example.com/sub/TOKEN';
 
+    o = s.option(form.Flag, 'auto_update', _('Автообновление'),
+      _('Раз в сутки в 05:00 по часовому поясу роутера.'));
+    o.default = '1';
+    o.rmempty = false;
+
     o = s.option(form.Button, '_update', _('Серверы'));
     o.inputtitle = _('Загрузить');
     o.inputstyle = 'apply';

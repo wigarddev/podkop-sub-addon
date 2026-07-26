@@ -6,7 +6,7 @@
 
 | Пакет | Содержимое |
 |---|---|
-| `podkop-sub` | CLI (`podkop-sub update`) и UCI-конфиг |
+| `podkop-sub` | CLI (`podkop-sub update`), UCI-конфиг и задание в cron |
 | `luci-app-podkop-sub` | Страница в LuCI |
 
 ## Как это работает
@@ -54,9 +54,36 @@ apk add --allow-untrusted podkop-sub-*.apk luci-app-podkop-sub-*.apk
 
 ```
 config subscription 'main'
-	option url ''        # ссылка подписки
-	option target 'main' # в какую секцию podkop писать
+	option url ''           # ссылка подписки
+	option target 'main'    # в какую секцию podkop писать
+	option auto_update '1'  # обновлять раз в сутки
 ```
+
+## Автообновление
+
+При включённом `auto_update` в crontab пользователя root появляется строка:
+
+```
+0 5 * * * /usr/bin/podkop-sub update >/dev/null 2>&1
+```
+
+Время — по часовому поясу роутера (*System → System → Timezone*), а не по вашему:
+на свежей прошивке это UTC. Вывод уходит в syslog, поэтому из cron он не нужен.
+
+При сохранении в LuCI строка обновляется сама: `/etc/init.d/podkop-sub` подписан
+на procd-триггер `config.change`, который LuCI посылает при применении настроек.
+Простой `uci commit` такого события не создаёт, поэтому после правки из консоли
+синхронизацию нужно позвать самому:
+
+```sh
+uci set podkop-sub.main.auto_update=0
+uci commit podkop-sub
+podkop-sub cron
+```
+
+Пока ссылка не задана, задание не создаётся: иначе каждую ночь в лог падала бы
+одна и та же ошибка. Если на роутере не было ни одного задания, `crond` не
+запущен — тогда он включается и стартует вместе с созданием строки.
 
 ## Границы ответственности
 
@@ -64,9 +91,6 @@ config subscription 'main'
 `proxy_config_type` и `urltest_proxy_links`. Всё остальное — списки маршрутизации,
 DNS, интерфейсы — настраивается в интерфейсе самого podkop. Эти две опции руками
 нельзя трогать: они перезаписываются при каждом обновлении.
-
-Обновления по расписанию пока нет — список подтягивается по кнопке «Загрузить»
-или командой `podkop-sub update`.
 
 ## Сборка
 

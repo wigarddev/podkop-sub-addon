@@ -1,3 +1,4 @@
 config subscription 'main'
   option url ''
   option target 'main'
+  option auto_update '1'

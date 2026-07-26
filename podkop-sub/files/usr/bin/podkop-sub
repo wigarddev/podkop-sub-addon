@@ -1,0 +1,129 @@
+#!/bin/sh
+# podkop-sub - fetch a subscription URL and feed its servers into podkop
+
+. /lib/functions.sh
+
+CONF=podkop-sub
+UA="podkop-sub/0.1"
+
+log() { logger -t podkop-sub "$1"; echo "$1"; }
+err() { logger -t podkop-sub -p user.err "$1"; echo "$1" >&2; }
+
+# Hide the token before anything reaches a log or the UI
+mask_url() {
+  echo "$1" | sed -E 's#(://[^/]*/).*#\1<masked>#'
+}
+
+# Subscriptions come base64'd with the URL-safe alphabet as often as the
+# standard one, and padding is routinely stripped. Put both back.
+b64_decode() {
+  local data
+  data=$(tr -d '\n\r \t' | tr -- '-_' '+/')
+  case $((${#data} % 4)) in
+    2) data="$data==" ;;
+    3) data="$data=" ;;
+  esac
+  printf '%s' "$data" | base64 -d 2>/dev/null
+}
+
+BACKUP=/tmp/podkop-sub.podkop.prev
+
+cmd_update() {
+  local url target body payload links count before after applied i
+
+  config_load "$CONF"
+  config_get url    main url
+  config_get target main target 'main'
+
+  [ -n "$url" ] || { err "Subscription URL is not set"; return 2; }
+
+  if ! uci -q get podkop."$target" >/dev/null; then
+    err "podkop has no section '$target'"
+    return 2
+  fi
+
+  log "Fetching $(mask_url "$url")"
+  body=$(curl -fsSL --max-time 30 -A "$UA" "$url") || {
+    err "Fetch failed"
+    return 3
+  }
+
+  # Some panels serve the list already decoded
+  case "$body" in
+    *://*) payload="$body" ;;
+    *)     payload=$(printf '%s' "$body" | b64_decode) ;;
+  esac
+
+  links=$(printf '%s\n' "$payload" \
+    | tr -d '\r' \
+    | grep -E '^(vless|vmess|trojan|ss|hysteria2|socks5?)://' \
+    | awk '!seen[$0]++')
+
+  count=$(printf '%s' "$links" | grep -c . )
+  [ "$count" -gt 0 ] || {
+    err "No server links found in the subscription"
+    return 4
+  }
+
+  # The UCI write below lands before podkop gets a chance to reject it, so a
+  # bad subscription would leave a config that only breaks on the next boot.
+  # Copy the whole file rather than saving the two options: link tags may
+  # contain spaces, and a UCI list cannot be split back apart reliably.
+  cp /etc/config/podkop "$BACKUP"
+
+  uci -q delete podkop."$target".urltest_proxy_links
+  printf '%s\n' "$links" | while IFS= read -r link; do
+    [ -n "$link" ] && uci add_list podkop."$target".urltest_proxy_links="$link"
+  done
+  uci set podkop."$target".proxy_config_type='urltest'
+  uci commit podkop
+
+  log "Loaded $count servers into podkop section '$target'"
+
+  # podkop validates the generated sing-box config and keeps the old one if it
+  # fails, so a successful write here does not mean the servers are live.
+  # It rewrites config.json on every successful start - watch its mtime.
+  before=$(date -r /etc/sing-box/config.json +%s 2>/dev/null || echo 0)
+
+  # podkop restarts itself on a config trigger too, but do it explicitly so
+  # the wait below starts from a known point
+  /etc/init.d/podkop restart >/dev/null 2>&1
+
+  i=0
+  after="$before"
+  while [ "$i" -lt 25 ]; do
+    after=$(date -r /etc/sing-box/config.json +%s 2>/dev/null || echo 0)
+    [ "$after" != "$before" ] && break
+    sleep 1
+    i=$((i + 1))
+  done
+
+  if [ "$after" = "$before" ]; then
+    err "podkop rejected the new servers: $(logread -e podkop | grep -F '[fatal]' | tail -1 | sed 's/.*\[fatal\] //')"
+    cp "$BACKUP" /etc/config/podkop
+    /etc/init.d/podkop restart >/dev/null 2>&1
+    err "Previous server list restored"
+    return 5
+  fi
+
+  applied=$(jq -r '[.outbounds[] | select(.type=="urltest") | .outbounds[]] | length' \
+    /etc/sing-box/config.json 2>/dev/null)
+  if [ "$applied" = "$count" ]; then
+    log "podkop applied all $count servers"
+  else
+    err "podkop applied $applied of $count servers"
+    return 6
+  fi
+}
+
+case "$1" in
+  update) cmd_update ;;
+  *)
+    # Deliberately not a <<-EOF heredoc: that form strips only tabs, so a
+    # reindent to spaces silently breaks the script.
+    echo "Usage: $0 update"
+    echo
+    echo "    update    fetch the subscription and rewrite podkop's server list"
+    exit 1
+    ;;
+esac

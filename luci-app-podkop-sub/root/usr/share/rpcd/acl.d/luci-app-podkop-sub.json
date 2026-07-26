@@ -1,0 +1,14 @@
+{
+  "luci-app-podkop-sub": {
+    "description": "Grant UCI and RPC access to LuCI app podkop-sub",
+    "read": {
+      "file": {
+        "/usr/bin/podkop-sub": [ "exec" ]
+      },
+      "uci": [ "podkop-sub" ]
+    },
+    "write": {
+      "uci": [ "podkop-sub" ]
+    }
+  }
+}
